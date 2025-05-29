@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>アンケート結果可視化ツール ✨</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8; /* Light blue-gray background */
+        }
+        .question-section {
+            page-break-inside: avoid;
+        }
+        .chart-container {
+            position: relative;
+            margin: auto;
+            height: 350px; /* Slightly taller charts for datalabels */
+            width: 100%;
+            max-width: 600px;
+        }
+        /* Custom scrollbar for better aesthetics (optional) */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; /* Tailwind gray-300 */
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; /* Tailwind gray-500 */
+        }
+
+        @media print {
+            body {
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+                background-color: #ffffff; /* White background for print */
+            }
+            .no-print {
+                display: none !important;
+            }
+            #reportContainer {
+                box-shadow: none;
+                border: none;
+            }
+            .question-section {
+                 box-shadow: none;
+                 border: 1px solid #e2e8f0;
+                 margin-bottom: 1rem;
+            }
+            .chart-container {
+                height: 330px; /* Ensure consistent chart height in PDF */
+            }
+        }
+    </style>
+</head>
+<body class="antialiased">
+
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+        <header class="mb-10 text-center">
+            <h1 class="text-4xl sm:text-5xl font-extrabold">
+                <span class="text-transparent bg-clip-text bg-gradient-to-r from-purple-500 via-pink-500 to-orange-500">
+                    アンケート結果分析ツール 📊
+                </span>
+            </h1>
+            <p class="text-gray-600 mt-3 text-lg">CSVをアップロードして、パッと結果を可視化！</p>
+        </header>
+
+        <section class="mb-8 p-6 bg-white rounded-xl shadow-xl no-print">
+            <label for="csvFileInput" class="flex items-center justify-center w-full h-32 px-4 transition bg-white border-2 border-gray-300 border-dashed rounded-md appearance-none cursor-pointer hover:border-gray-400 focus:outline-none">
+                <span class="flex items-center space-x-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    <span class="font-medium text-gray-600">
+                        ここにCSVファイルを<span class="text-purple-600">ドラッグ＆ドロップ</span>するか、<span class="text-purple-600">クリックして選択</span>
+                    </span>
+                </span>
+                <input type="file" id="csvFileInput" accept=".csv" class="hidden"/>
+            </label>
+            <p id="fileNameDisplay" class="mt-4 text-center text-sm text-gray-700"></p>
+        </section>
+
+        <div id="loadingIndicator" class="hidden text-center my-8">
+            <div class="inline-flex items-center px-6 py-3 font-semibold leading-6 text-lg shadow rounded-lg text-white bg-gradient-to-r from-sky-500 to-indigo-500 transition ease-in-out duration-150">
+                <svg class="animate-spin -ml-1 mr-3 h-6 w-6 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                データ処理中... お楽しみに！ 🚀
+            </div>
+        </div>
+        
+        <div id="errorMessage" class="hidden text-center my-6 p-4 bg-red-100 text-red-700 rounded-xl shadow-md"></div>
+
+        <section id="reportContainer" class="space-y-10">
+            </section>
+
+        <footer class="mt-12 text-center no-print">
+            <button id="downloadPdfButton" class="hidden bg-gradient-to-r from-green-500 to-teal-500 hover:from-green-600 hover:to-teal-600 text-white font-bold py-4 px-10 rounded-lg shadow-xl transform hover:scale-105 transition-transform duration-150 ease-in-out focus:outline-none focus:ring-4 focus:ring-green-300">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+                </svg>
+                レポートをPDFで保存
+            </button>
+        </footer>
+    </div>
+
+    <script>
+        // Register Chart.js Datalabels plugin globally
+        Chart.register(ChartDataLabels);
+
+        // DOM elements
+        const csvFileInput = document.getElementById('csvFileInput');
+        const fileInputLabel = csvFileInput.parentElement; // Get the label for drag & drop styling
+        const fileNameDisplay = document.getElementById('fileNameDisplay');
+        const reportContainer = document.getElementById('reportContainer');
+        const downloadPdfButton = document.getElementById('downloadPdfButton');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const errorMessage = document.getElementById('errorMessage');
+        
+        let originalFileName = '';
+        let activeCharts = [];
+
+        // Attach event listeners
+        csvFileInput.addEventListener('change', handleFileUpload);
+        downloadPdfButton.addEventListener('click', generatePdf);
+
+        // Drag and drop functionality for file input
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            fileInputLabel.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            fileInputLabel.addEventListener(eventName, () => fileInputLabel.classList.add('border-purple-500', 'bg-purple-50'), false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            fileInputLabel.addEventListener(eventName, () => fileInputLabel.classList.remove('border-purple-500', 'bg-purple-50'), false);
+        });
+
+        fileInputLabel.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            let dt = e.dataTransfer;
+            let files = dt.files;
+            if (files.length > 0) {
+                csvFileInput.files = files; // Assign dropped files to input
+                handleFileUpload({ target: csvFileInput }); // Trigger upload handler
+            }
+        }
+
+
+        /**
+         * Handles the CSV file upload and initiates parsing.
+         * @param {Event} event - The file input change event.
+         */
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) {
+                fileNameDisplay.textContent = 'ファイルが選択されていません。';
+                return;
+            }
+             if (!file.name.toLowerCase().endsWith('.csv')) {
+                showError('CSVファイルを選択してください。(エラー: 無効なファイルタイプ)');
+                fileNameDisplay.textContent = `エラー: ${file.name} はCSVファイルではありません。`;
+                csvFileInput.value = ''; // Clear the input
+                return;
+            }
+
+
+            originalFileName = file.name;
+            fileNameDisplay.textContent = `読み込み中: ${originalFileName} 🧐`;
+            loadingIndicator.classList.remove('hidden');
+            errorMessage.classList.add('hidden');
+            reportContainer.innerHTML = '';
+            downloadPdfButton.classList.add('hidden');
+            destroyActiveCharts();
+
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                encoding: "UTF-8",
+                complete: function(results) {
+                    loadingIndicator.classList.add('hidden');
+                    if (results.errors.length > 0) {
+                        console.error("CSV Parsing Errors:", results.errors);
+                        showError("CSVファイルの解析中にエラーが発生しました。ファイル形式やエンコーディング (UTF-8推奨) を確認してください。エラー: " + results.errors.map(e => e.message).join(', '));
+                        fileNameDisplay.textContent = `解析エラー: ${originalFileName}`;
+                        return;
+                    }
+                    if (!results.data || results.data.length === 0) {
+                        showError("CSVファイルが空か、有効なデータが含まれていません。");
+                        fileNameDisplay.textContent = `データなし: ${originalFileName}`;
+                        return;
+                    }
+                    fileNameDisplay.textContent = `表示準備完了: ${originalFileName} 🎉`;
+                    displayReport(results.data, results.meta.fields);
+                    downloadPdfButton.classList.remove('hidden');
+                },
+                error: function(error) {
+                    loadingIndicator.classList.add('hidden');
+                    console.error("PapaParse Error:", error);
+                    showError("ファイルの読み込み中にエラーが発生しました: " + error.message);
+                    fileNameDisplay.textContent = `読み込みエラー: ${originalFileName}`;
+                }
+            });
+        }
+
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.remove('hidden');
+            reportContainer.innerHTML = '';
+            downloadPdfButton.classList.add('hidden');
+        }
+        
+        function destroyActiveCharts() {
+            activeCharts.forEach(chart => chart.destroy());
+            activeCharts = [];
+        }
+
+        /**
+         * Processes and displays the parsed CSV data.
+         * Filters out irrelevant columns and applies new UI enhancements.
+         * @param {Array<Object>} rows - Array of data rows.
+         * @param {Array<string>} headers - Array of column headers.
+         */
+        function displayReport(rows, headers) {
+            reportContainer.innerHTML = ''; 
+
+            const ignoredHeadersExactMatch = ["学校名"].map(h => h.toLowerCase());
+            const ignoredHeadersContain = [
+                "submission id", "submit date", "start date", "end date", 
+                "ip address", "network id", "tags", "user agent",
+                "fillout_account_id", "submission_edit_link", "timestamp",
+                "status", "url", "error",
+                "current step", "last updated", "submission started" // Added "submission started"
+            ].map(h => h.toLowerCase());
+
+            headers.forEach((header, colIndex) => {
+                if (header === null || header === undefined) {
+                    console.log(`Skipping null or undefined header at index ${colIndex}`);
+                    return;
+                }
+                const originalHeader = String(header).trim();
+                const lowerCaseHeader = originalHeader.toLowerCase();
+
+                let skipColumn = false;
+                if (ignoredHeadersExactMatch.includes(lowerCaseHeader)) {
+                    skipColumn = true;
+                } else {
+                    for (const term of ignoredHeadersContain) {
+                        if (lowerCaseHeader.includes(term)) {
+                            skipColumn = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (skipColumn) {
+                    console.log(`Ignoring column: "${originalHeader}"`);
+                    return; 
+                }
+
+                const columnValues = rows.map(row => row[originalHeader])
+                                         .filter(value => value !== null && value !== undefined && String(value).trim() !== '');
+
+                if (columnValues.length === 0) {
+                    console.log(`Skipping column: "${originalHeader}" (no valid values).`);
+                    return;
+                }
+
+                const valueCounts = {};
+                columnValues.forEach(val => {
+                    const trimmedVal = String(val).trim();
+                    valueCounts[trimmedVal] = (valueCounts[trimmedVal] || 0) + 1;
+                });
+                
+                const uniqueEntries = Object.entries(valueCounts);
+                const numUnique = uniqueEntries.length;
+
+                const isLikelyFreeText = numUnique > (columnValues.length * 0.6) || numUnique > 20 || columnValues.length < 5;
+                const isChartable = !isLikelyFreeText && numUnique >= 2 && numUnique <= 20 && columnValues.length >= numUnique;
+
+
+                const questionSection = document.createElement('div');
+                questionSection.className = 'p-5 sm:p-6 bg-white rounded-xl shadow-lg question-section mb-6 border-t-4 border-purple-500';
+                
+                const questionHeaderElement = document.createElement('h2');
+                questionHeaderElement.className = 'text-xl lg:text-2xl font-semibold text-gray-800 mb-5 pb-3 border-b border-gray-200 flex items-center';
+
+                let iconSvg = '';
+                if (isChartable) {
+                    iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7 mr-3 text-purple-600 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor"><path d="M2 11h1.447c.352.804.863 1.523 1.486 2.147L3.5 14.584A.5.5 0 004 15.414l.707.707a.5.5 0 00.828-.085l1.533-2.299A6.003 6.003 0 0010 14c1.97 0 3.727-.957 4.823-2.416l1.533 2.299a.5.5 0 00.828.085l.707-.707a.5.5 0 00.085-.828l-1.433-1.437c.624-.623 1.135-1.343 1.487-2.147H18a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1.447a5.973 5.973 0 00-1.487-2.147L16.5 3.416a.5.5 0 00-.828-.085l-.707.707a.5.5 0 00-.085.828l1.433 1.437c-.623.624-1.134 1.343-1.486 2.147H12V7a1 1 0 10-2 0v1H7.933c-.352-.804-.863-1.523-1.486-2.147L7.88.416a.5.5 0 00-.707-.707A.5.5 0 006.5 0l-1.433 1.437A5.978 5.978 0 003.583 3.5H2a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1.513c.352.804.864 1.523 1.487 2.147L3.5 9.584A.5.5 0 004 10.414l.707.707a.5.5 0 00.828.085l1.533-2.299A6.003 6.003 0 0010 8c1.97 0 3.727.957 4.823-2.416l1.533-2.299a.5.5 0 00.828-.085l.707-.707a.5.5 0 00.085-.828l-1.433-1.437c.624-.623 1.135-1.343 1.487-2.147H18a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1.447a5.973 5.973 0 00-1.487-2.147L16.5.416a.5.5 0 00-.828-.085l-.707.707a.5.5 0 00-.085.828l1.433 1.437A5.973 5.973 0 0012.067 5H10a1 1 0 100 2h2.067c.352.804.863 1.523 1.486 2.147L12.12 11.584a.5.5 0 00.707.707.5.5 0 00.628-.085l1.533-2.299A6.003 6.003 0 0010 12c-1.97 0-3.727-.957-4.823-2.416L3.644 7.285a.5.5 0 00-.828-.085L2.109 7.907a.5.5 0 00-.085.828l1.433 1.437A5.973 5.973 0 005.033 11H2zm8-2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>`;
+                } else {
+                    iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7 mr-3 text-sky-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h7" /></svg>`;
+                }
+                questionHeaderElement.innerHTML = iconSvg + `<span class="truncate">${originalHeader}</span>`;
+                questionSection.appendChild(questionHeaderElement);
+
+                const questionContent = document.createElement('div');
+                questionContent.className = 'question-content text-gray-700 text-base';
+
+                if (isChartable) {
+                    const chartContainer = document.createElement('div');
+                    chartContainer.className = 'chart-container';
+                    
+                    const canvas = document.createElement('canvas');
+                    canvas.id = `chart-${colIndex}`;
+                    chartContainer.appendChild(canvas);
+                    questionContent.appendChild(chartContainer);
+
+                    const labels = uniqueEntries.map(entry => entry[0]);
+                    const dataValues = uniqueEntries.map(entry => entry[1]);
+                    const totalValues = dataValues.reduce((sum, val) => sum + val, 0);
+
+                    const chartColors = [
+                        '#8B5CF6', '#EC4899', '#10B981', '#F59E0B', '#3B82F6',
+                        '#D946EF', '#6EE7B7', '#FCD34D', '#6366F1', '#F472B6'
+                    ];
+                    const backgroundColors = labels.map((_, i) => chartColors[i % chartColors.length] + 'BF');
+                    const borderColors = labels.map((_, i) => chartColors[i % chartColors.length]);
+
+                    const chart = new Chart(canvas, {
+                        type: 'pie',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: '回答数',
+                                data: dataValues,
+                                backgroundColor: backgroundColors,
+                                borderColor: borderColors,
+                                borderWidth: 1.5
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    position: 'right',
+                                    labels: {
+                                        font: { size: 13 },
+                                        boxWidth: 20,
+                                        padding: 15,
+                                        // Optionally, customize legend to include counts/percentages
+                                        // generateLabels: function(chart) {
+                                        //    // Default implementation:
+                                        //    const data = chart.data;
+                                        //    if (data.labels.length && data.datasets.length) {
+                                        //        return data.labels.map(function(label, i) {
+                                        //            const meta = chart.getDatasetMeta(0);
+                                        //            const style = meta.controller.getStyle(i);
+                                        //            const count = data.datasets[0].data[i];
+                                        //            const percentage = totalValues > 0 ? (count / totalValues * 100).toFixed(1) : 0;
+                                        //            return {
+                                        //                text: `${label}: ${count} (${percentage}%)`,
+                                        //                fillStyle: style.backgroundColor,
+                                        //                strokeStyle: style.borderColor,
+                                        //                lineWidth: style.borderWidth,
+                                        //                hidden: isNaN(data.datasets[0].data[i]) || meta.data[i].hidden,
+                                        //                index: i
+                                        //            };
+                                        //        });
+                                        //    }
+                                        //    return [];
+                                        // }
+                                    }
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        label: function(context) {
+                                            let label = context.label || '';
+                                            const value = context.parsed;
+                                            const percentage = totalValues > 0 ? (value / totalValues * 100).toFixed(1) : 0;
+                                            if (label) {
+                                                label += ': ';
+                                            }
+                                            if (value !== null) {
+                                                label += `${value}件 (${percentage}%)`;
+                                            }
+                                            return label;
+                                        }
+                                    }
+                                },
+                                datalabels: { // Datalabels plugin configuration
+                                    formatter: (value, context) => {
+                                        const percentage = totalValues > 0 ? (value / totalValues * 100).toFixed(1) : 0;
+                                        if (parseFloat(percentage) < 5) return ''; // Hide label if percentage is too small
+                                        return percentage + '%';
+                                    },
+                                    color: '#fff', // Color of the labels
+                                    font: {
+                                        weight: 'bold',
+                                        size: 12,
+                                    },
+                                    anchor: 'end', // Position of the labels
+                                    align: 'start', // Alignment of the labels
+                                    offset: -10, // Offset from the anchor point
+                                    borderRadius: 4,
+                                    backgroundColor: (context) => { // Optional: background for better readability
+                                        return context.dataset.borderColor[context.dataIndex];
+                                    },
+                                    padding: 4
+                                }
+                            }
+                        }
+                    });
+                    activeCharts.push(chart);
+                } else {
+                    if (columnValues.length > 0) {
+                        const list = document.createElement('ul');
+                        list.className = 'space-y-2 pl-1';
+                        columnValues.forEach(value => {
+                            const listItem = document.createElement('li');
+                            listItem.className = "p-3 bg-gray-50 rounded-md border border-gray-200 text-sm";
+                            listItem.textContent = String(value).trim();
+                            list.appendChild(listItem);
+                        });
+                        questionContent.appendChild(list);
+                    } else {
+                        const noDataText = document.createElement('p');
+                        noDataText.textContent = '（この質問への有効な回答はありませんでした）';
+                        noDataText.className = 'text-gray-500 italic p-3 bg-gray-50 rounded-md';
+                        questionContent.appendChild(noDataText);
+                    }
+                }
+                questionSection.appendChild(questionContent);
+                reportContainer.appendChild(questionSection);
+            });
+        }
+
+        function generatePdf() {
+            if (!originalFileName) {
+                showError("まずCSVファイルをアップロードしてください。");
+                return;
+            }
+            
+            const pdfFileName = originalFileName.replace(/\.csv$/i, '') + '_report.pdf';
+            const element = document.getElementById('reportContainer');
+
+            if (!element || element.innerHTML.trim() === '') {
+                showError("PDFを生成するための表示可能なコンテンツがありません。");
+                return;
+            }
+
+            // Temporarily disable datalabels for PDF generation if they cause issues or clutter
+            // This can be done by setting Chart.defaults.plugins.datalabels.display = false;
+            // and then re-enabling it after PDF generation.
+            // However, html2pdf.js should render them if they are visible on screen.
+
+            const opt = {
+                margin:       [0.5, 0.4, 0.5, 0.4], 
+                filename:     pdfFileName,
+                image:        { type: 'jpeg', quality: 0.95 }, 
+                html2canvas:  { scale: 2, logging: false, useCORS: true, letterRendering: true, scrollY: 0 },
+                jsPDF:        { unit: 'in', format: 'a4', orientation: 'portrait' },
+                pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
+            };
+
+            const pdfLoadingMessage = document.createElement('p');
+            pdfLoadingMessage.id = 'pdfLoadingMessage';
+            pdfLoadingMessage.textContent = 'すごいレポートをPDFで作成中です... 少々お待ちくださいね！ 🪄';
+            pdfLoadingMessage.className = 'text-center text-lg text-purple-700 my-5 p-4 bg-purple-100 rounded-lg shadow no-print';
+            reportContainer.parentNode.insertBefore(pdfLoadingMessage, reportContainer.nextSibling);
+
+            downloadPdfButton.disabled = true;
+            downloadPdfButton.classList.add('opacity-60', 'cursor-not-allowed');
+            downloadPdfButton.innerHTML = `
+                <svg class="animate-spin h-5 w-5 mr-3 inline-block" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12,4V2A10,10,0,0,0,2,12H4A8,8,0,0,1,12,4Z"/>
+                </svg>
+                作成中...`;
+
+
+            html2pdf().from(element).set(opt).save()
+                .then(() => {
+                    console.log("PDF generated successfully.");
+                    const existingMsg = document.getElementById('pdfLoadingMessage');
+                    if (existingMsg) existingMsg.remove();
+                })
+                .catch(err => {
+                    console.error("PDF generation error:", err);
+                    showError("PDFの生成中にエラーが発生しました: " + err.message + " (グラフが多い場合、時間がかかることがあります)");
+                    const existingMsg = document.getElementById('pdfLoadingMessage');
+                    if (existingMsg) existingMsg.remove();
+                })
+                .finally(() => {
+                    downloadPdfButton.disabled = false;
+                    downloadPdfButton.classList.remove('opacity-60', 'cursor-not-allowed');
+                    downloadPdfButton.innerHTML = `
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+                        </svg>
+                        レポートをPDFで保存`;
+                });
+        }
+
+    </script>
+</body>
+</html>
