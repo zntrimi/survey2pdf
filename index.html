@@ -445,7 +445,7 @@
             });
         }
 
-        function generatePdf() {
+        async function generatePdf() {
             if (!originalFileName) {
                 showError("まずCSVファイルをアップロードしてください。");
                 return;
@@ -459,26 +459,13 @@
                 return;
             }
 
-            // Temporarily disable datalabels for PDF generation if they cause issues or clutter
-            // This can be done by setting Chart.defaults.plugins.datalabels.display = false;
-            // and then re-enabling it after PDF generation.
-            // However, html2pdf.js should render them if they are visible on screen.
-
-            const opt = {
-                margin:       [0.5, 0.4, 0.5, 0.4], 
-                filename:     pdfFileName,
-                image:        { type: 'jpeg', quality: 0.95 }, 
-                html2canvas:  { scale: 2, logging: false, useCORS: true, letterRendering: true, scrollY: 0 },
-                jsPDF:        { unit: 'in', format: 'a4', orientation: 'portrait' },
-                pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
-            };
-
             const pdfLoadingMessage = document.createElement('p');
             pdfLoadingMessage.id = 'pdfLoadingMessage';
             pdfLoadingMessage.textContent = 'すごいレポートをPDFで作成中です... 少々お待ちくださいね！ 🪄';
             pdfLoadingMessage.className = 'text-center text-lg text-purple-700 my-5 p-4 bg-purple-100 rounded-lg shadow no-print';
             reportContainer.parentNode.insertBefore(pdfLoadingMessage, reportContainer.nextSibling);
 
+            const downloadButtonOriginalText = downloadPdfButton.innerHTML;
             downloadPdfButton.disabled = true;
             downloadPdfButton.classList.add('opacity-60', 'cursor-not-allowed');
             downloadPdfButton.innerHTML = `
@@ -487,28 +474,92 @@
                 </svg>
                 作成中...`;
 
+            const imagesAndCanvases = [];
+            
+            try {
+                // Step 1: Temporarily disable chart animations for instant conversion
+                Chart.defaults.animation.duration = 0;
 
-            html2pdf().from(element).set(opt).save()
-                .then(() => {
-                    console.log("PDF generated successfully.");
-                    const existingMsg = document.getElementById('pdfLoadingMessage');
-                    if (existingMsg) existingMsg.remove();
-                })
-                .catch(err => {
-                    console.error("PDF generation error:", err);
-                    showError("PDFの生成中にエラーが発生しました: " + err.message + " (グラフが多い場合、時間がかかることがあります)");
-                    const existingMsg = document.getElementById('pdfLoadingMessage');
-                    if (existingMsg) existingMsg.remove();
-                })
-                .finally(() => {
-                    downloadPdfButton.disabled = false;
-                    downloadPdfButton.classList.remove('opacity-60', 'cursor-not-allowed');
-                    downloadPdfButton.innerHTML = `
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
-                        </svg>
-                        レポートをPDFで保存`;
+                const chartCanvases = element.querySelectorAll('canvas');
+                
+                // Step 2: Convert all charts to images and wait for them to fully load
+                const conversionPromises = Array.from(chartCanvases).map(canvas => {
+                    return new Promise((resolve, reject) => {
+                        const chart = activeCharts.find(c => c.canvas === canvas);
+                        if (chart) {
+                            const img = new Image();
+                            
+                            // Create base64 URL with a white background to prevent transparency issues
+                            const ctx = chart.ctx;
+                            ctx.save();
+                            ctx.globalCompositeOperation = 'destination-over';
+                            ctx.fillStyle = 'white';
+                            ctx.fillRect(0, 0, chart.width, chart.height);
+                            const dataUrl = chart.toBase64Image('image/jpeg', 0.95);
+                            ctx.restore();
+
+                            img.onload = () => {
+                                // IMPORTANT: Pin container dimensions and replace canvas
+                                const container = canvas.parentNode;
+                                if (container && container.offsetHeight > 0) {
+                                    // Fix the container's height to prevent layout shifts
+                                    container.style.height = `${container.offsetHeight}px`;
+                                }
+                                img.style.width = "100%";
+                                img.style.height = "100%"; // Fill the fixed container
+                                img.style.objectFit = 'contain';
+
+                                canvas.style.display = 'none';
+                                container.appendChild(img);
+                                imagesAndCanvases.push({img, canvas, container});
+                                resolve();
+                            };
+                            img.onerror = () => reject(new Error("グラフ画像の読み込みに失敗しました。"));
+                            img.src = dataUrl;
+                        } else {
+                            resolve(); // No active chart for this canvas
+                        }
+                    });
                 });
+
+                await Promise.all(conversionPromises);
+
+                // Step 3: CRITICAL - Wait for the browser to paint the newly added images
+                // This prevents a race condition where the PDF is generated before images are rendered.
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                // Step 4: Generate the PDF
+                const opt = {
+                    margin:       [0.5, 0.4, 0.5, 0.4], 
+                    filename:     pdfFileName,
+                    image:        { type: 'jpeg', quality: 0.95 }, 
+                    html2canvas:  { scale: 2, logging: false, useCORS: true, letterRendering: true },
+                    jsPDF:        { unit: 'in', format: 'a4', orientation: 'portrait' },
+                    pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
+                };
+
+                await html2pdf().from(element).set(opt).save();
+
+            } catch (err) {
+                console.error("PDF generation error:", err);
+                showError(`PDFの生成中にエラーが発生しました: ${err.message}`);
+            } finally {
+                // Step 5: Always clean up the DOM and UI state
+                Chart.defaults.animation.duration = 1000; // Restore animations
+
+                imagesAndCanvases.forEach(({img, canvas, container}) => {
+                    if (img) img.remove();
+                    if (canvas) canvas.style.display = 'block';
+                    if (container) container.style.height = ''; // Un-fix container height
+                });
+
+                const existingMsg = document.getElementById('pdfLoadingMessage');
+                if (existingMsg) existingMsg.remove();
+
+                downloadPdfButton.disabled = false;
+                downloadPdfButton.classList.remove('opacity-60', 'cursor-not-allowed');
+                downloadPdfButton.innerHTML = downloadButtonOriginalText;
+            }
         }
 
     </script>
