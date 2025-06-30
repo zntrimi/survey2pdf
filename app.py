@@ -101,9 +101,9 @@ class PDF(FPDF):
         else:
             self.set_font('Arial', 'B', 14)
         
-        chars_per_line = 45
+        chars_per_line = 40
         estimated_lines = max(1, (len(title_text) // chars_per_line) + 1)
-        title_height = max(12, estimated_lines * 7 + 6)
+        title_height = max(15, estimated_lines * 8 + 8)
         
         if is_chart:
             self.set_fill_color(139, 92, 246)
@@ -121,10 +121,10 @@ class PDF(FPDF):
         
         self.rect(box_x, box_y, box_width, title_height, 'FD')
         
-        self.set_xy(box_x + 5, box_y + 3)
+        self.set_xy(box_x + 5, box_y + 4)
         
         text_width = box_width - 10
-        self.multi_cell(text_width, 6, title_text, 0, align='L')
+        self.multi_cell(text_width, 7, title_text, 0, align='L')
         
         self.set_text_color(0, 0, 0)
         
@@ -183,7 +183,7 @@ def create_modern_chart(counts, title, total_responses):
     plt.tight_layout()
     return fig
 
-def generate_report(df, ignored_exact, ignored_contain, free_text_threshold, pdf_filename):
+def generate_report(df, ignored_exact, ignored_contain, free_text_threshold, max_display_answers, max_text_length, pdf_filename):
     pdf = PDF()
     pdf.add_page()
 
@@ -248,13 +248,17 @@ def generate_report(df, ignored_exact, ignored_contain, free_text_threshold, pdf
                     
                 pdf.set_fill_color(249, 250, 251)
                 
-                unique_answers = answers.unique()[:50]
+                # 表示制限を緩和（設定可能）
+                unique_answers = answers.unique()[:max_display_answers]
                 
                 for j, ans in enumerate(unique_answers):
-                    display_text = str(ans)[:100] + ('...' if len(str(ans)) > 100 else '')
+                    # 文字数制限を設定可能に
+                    display_text = str(ans)[:max_text_length] + ('...' if len(str(ans)) > max_text_length else '')
                     
-                    text_lines = len(display_text) // 80 + 1
-                    item_height = max(10, text_lines * 6 + 4)
+                    # より正確な行数計算
+                    chars_per_line = 60
+                    text_lines = max(1, (len(display_text) // chars_per_line) + 1)
+                    item_height = max(12, text_lines * 6 + 6)
                     
                     pdf.check_page_break(item_height)
                     
@@ -267,9 +271,9 @@ def generate_report(df, ignored_exact, ignored_contain, free_text_threshold, pdf
                     
                     current_y = pdf.get_y()
                     pdf.set_line_width(0.2)
-                    pdf.rect(15, current_y, 180, item_height - 2, 'FD')
+                    pdf.rect(15, current_y, 180, item_height, 'FD')
                     
-                    pdf.set_xy(20, current_y + 2)
+                    pdf.set_xy(20, current_y + 3)
                     
                     if os.path.exists(font_path):
                         pdf.set_font('IPAexGothic', '', 10)
@@ -279,9 +283,10 @@ def generate_report(df, ignored_exact, ignored_contain, free_text_threshold, pdf
                     pdf.multi_cell(170, 5, f'• {display_text}', 0, align='L')
                     pdf.ln(2)
                 
-                if len(answers.unique()) > 50:
+                # 制限を緩和した場合の表示
+                if len(answers.unique()) > max_display_answers:
                     pdf.set_text_color(128, 128, 128)
-                    pdf.cell(0, 8, f'... 他 {len(answers.unique()) - 50} 件', 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+                    pdf.cell(0, 8, f'... 他 {len(answers.unique()) - max_display_answers} 件', 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
                     pdf.set_text_color(0, 0, 0)
                 
                 pdf.ln(5)
@@ -347,6 +352,24 @@ def main():
                 help="この数を超える選択肢がある場合、グラフ化せずに自由記述として表示します"
             )
             
+            # 自由記述の表示設定
+            st.sidebar.subheader("📝 自由記述表示設定")
+            max_display_answers = st.sidebar.slider(
+                "表示する回答の最大数",
+                min_value=20,
+                max_value=200,
+                value=100,
+                help="自由記述で表示する回答の最大数を設定します"
+            )
+            
+            max_text_length = st.sidebar.slider(
+                "回答テキストの最大文字数",
+                min_value=50,
+                max_value=500,
+                value=200,
+                help="各回答で表示する最大文字数を設定します"
+            )
+            
             # PDFファイル名
             pdf_filename = st.sidebar.text_input(
                 "PDFファイル名",
@@ -370,7 +393,7 @@ def main():
                     with st.spinner("レポートを生成中..."):
                         try:
                             pdf_buffer, processed_questions = generate_report(
-                                df, ignored_exact, ignored_contain, free_text_threshold, pdf_filename
+                                df, ignored_exact, ignored_contain, free_text_threshold, max_display_answers, max_text_length, pdf_filename
                             )
                             
                             st.success(f"🎉 レポートが完成しました！ (処理した質問数: {processed_questions})")
