@@ -9,6 +9,7 @@ import numpy as np
 import tempfile
 import zipfile
 from io import BytesIO
+from datetime import datetime
 
 # Streamlit configuration
 st.set_page_config(
@@ -18,7 +19,7 @@ st.set_page_config(
 )
 
 # デフォルト設定
-DEFAULT_IGNORED_HEADERS_EXACT = ["学校名"]
+DEFAULT_IGNORED_HEADERS_EXACT = []  # 学校名を無視リストから削除
 DEFAULT_IGNORED_HEADERS_CONTAIN = [
     "submission id", "submit date", "start date", "end date", 
     "ip address", "network id", "tags", "user agent",
@@ -101,9 +102,11 @@ class PDF(FPDF):
         else:
             self.set_font('Arial', 'B', 14)
         
-        chars_per_line = 40
-        estimated_lines = max(1, (len(title_text) // chars_per_line) + 1)
-        title_height = max(15, estimated_lines * 8 + 8)
+        # 実際の行数を取得（描画せずに計測）
+        text_width = self.w - 30  # 左右マージン 15mm
+        lines = self.multi_cell(text_width, 7, title_text, split_only=True)
+        line_count = len(lines)
+        title_height = max(20, line_count * 7 + 6)  # パディング込み
         
         if is_chart:
             self.set_fill_color(139, 92, 246)
@@ -119,15 +122,16 @@ class PDF(FPDF):
         box_y = self.get_y()
         box_width = self.w - 20
         
+        # 背景を描画
         self.rect(box_x, box_y, box_width, title_height, 'FD')
         
+        # テキストを描画
         self.set_xy(box_x + 5, box_y + 4)
-        
-        text_width = box_width - 10
         self.multi_cell(text_width, 7, title_text, 0, align='L')
         
         self.set_text_color(0, 0, 0)
         
+        # 次の位置を設定
         self.set_y(box_y + title_height + 5)
         self.ln(3)
 
@@ -183,7 +187,36 @@ def create_modern_chart(counts, title, total_responses):
     plt.tight_layout()
     return fig
 
-def generate_report(df, ignored_exact, ignored_contain, free_text_threshold, max_display_answers, max_text_length, pdf_filename):
+def get_school_name_from_df(df):
+    """データフレームから学校名を取得する"""
+    # 学校名に関連する列名を探す
+    school_columns = []
+    for col in df.columns:
+        col_lower = str(col).lower().strip()
+        if '学校名' in col_lower or 'school' in col_lower or '学校' in col_lower:
+            school_columns.append(col)
+    
+    if not school_columns:
+        return "アンケート"
+    
+    # 最初に見つかった学校名列を使用
+    school_col = school_columns[0]
+    school_names = df[school_col].dropna()
+    
+    if school_names.empty:
+        return "アンケート"
+    
+    # 最も多く使われている学校名を取得
+    school_name_counts = school_names.value_counts()
+    most_common_school = school_name_counts.index[0]
+    
+    # ファイル名に使えない文字を除去
+    safe_school_name = "".join(c for c in most_common_school if c.isalnum() or c in (' ', '-', '_')).strip()
+    safe_school_name = safe_school_name.replace(' ', '_')
+    
+    return safe_school_name if safe_school_name else "アンケート"
+
+def generate_report(df, ignored_exact, ignored_contain, free_text_threshold, pdf_filename):
     pdf = PDF()
     pdf.add_page()
 
@@ -248,46 +281,53 @@ def generate_report(df, ignored_exact, ignored_contain, free_text_threshold, max
                     
                 pdf.set_fill_color(249, 250, 251)
                 
-                # 表示制限を緩和（設定可能）
-                unique_answers = answers.unique()[:max_display_answers]
+                # 全ての回答を処理（制限なし）
+                unique_answers = answers.unique()
                 
                 for j, ans in enumerate(unique_answers):
-                    # 文字数制限を設定可能に
-                    display_text = str(ans)[:max_text_length] + ('...' if len(str(ans)) > max_text_length else '')
-                    
-                    # より正確な行数計算
-                    chars_per_line = 60
-                    text_lines = max(1, (len(display_text) // chars_per_line) + 1)
-                    item_height = max(12, text_lines * 6 + 6)
-                    
+                    # テキストの前処理：改行や余分な空白を整理
+                    display_text = str(ans).strip()
+                    display_text = ' '.join(display_text.replace('\n', ' ').replace('\r', ' ').split())
+
+                    # フォント設定
+                    if os.path.exists(font_path):
+                        pdf.set_font('IPAexGothic', '', 10)
+                    else:
+                        pdf.set_font('Arial', '', 10)
+
+                    line_height = 5
+                    bullet_indent = 4  # bullet width & spacing
+                    text_width = 170 - bullet_indent
+
+                    # テキストの行数を事前に取得（描画せず計測）
+                    lines = pdf.multi_cell(text_width, line_height, display_text, split_only=True)
+                    line_count = len(lines)
+                    item_height = max(12, line_count * line_height + 6)
+
                     pdf.check_page_break(item_height)
-                    
+
+                    # 交互に背景色
                     if j % 2 == 0:
                         pdf.set_fill_color(243, 244, 246)
                         pdf.set_draw_color(229, 231, 235)
                     else:
                         pdf.set_fill_color(255, 255, 255)
                         pdf.set_draw_color(229, 231, 235)
-                    
+
                     current_y = pdf.get_y()
                     pdf.set_line_width(0.2)
                     pdf.rect(15, current_y, 180, item_height, 'FD')
-                    
+
+                    # Bullet を描画
                     pdf.set_xy(20, current_y + 3)
-                    
-                    if os.path.exists(font_path):
-                        pdf.set_font('IPAexGothic', '', 10)
-                    else:
-                        pdf.set_font('Arial', '', 10)
-                    
-                    pdf.multi_cell(170, 5, f'• {display_text}', 0, align='L')
-                    pdf.ln(2)
-                
-                # 制限を緩和した場合の表示
-                if len(answers.unique()) > max_display_answers:
-                    pdf.set_text_color(128, 128, 128)
-                    pdf.cell(0, 8, f'... 他 {len(answers.unique()) - max_display_answers} 件', 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
-                    pdf.set_text_color(0, 0, 0)
+                    pdf.cell(bullet_indent, line_height, '•', 0, 0)
+
+                    # テキストを描画
+                    pdf.set_xy(20 + bullet_indent, current_y + 3)
+                    pdf.multi_cell(text_width, line_height, display_text, 0, align='L')
+
+                    # 次の項目の位置を設定
+                    pdf.set_y(current_y + item_height + 2)
                 
                 pdf.ln(5)
             
@@ -352,28 +392,14 @@ def main():
                 help="この数を超える選択肢がある場合、グラフ化せずに自由記述として表示します"
             )
             
-            # 自由記述の表示設定
-            st.sidebar.subheader("📝 自由記述表示設定")
-            max_display_answers = st.sidebar.slider(
-                "表示する回答の最大数",
-                min_value=20,
-                max_value=200,
-                value=100,
-                help="自由記述で表示する回答の最大数を設定します"
-            )
-            
-            max_text_length = st.sidebar.slider(
-                "回答テキストの最大文字数",
-                min_value=50,
-                max_value=500,
-                value=200,
-                help="各回答で表示する最大文字数を設定します"
-            )
-            
             # PDFファイル名
+            school_name = get_school_name_from_df(df)
+            current_date = datetime.now().strftime("%Y%m%d")
+            default_filename = f"{school_name}_{current_date}_アンケート結果レポート.pdf"
+            
             pdf_filename = st.sidebar.text_input(
                 "PDFファイル名",
-                value="アンケート結果レポート.pdf"
+                value=default_filename
             )
             
             # 処理対象の列を表示
@@ -393,7 +419,7 @@ def main():
                     with st.spinner("レポートを生成中..."):
                         try:
                             pdf_buffer, processed_questions = generate_report(
-                                df, ignored_exact, ignored_contain, free_text_threshold, max_display_answers, max_text_length, pdf_filename
+                                df, ignored_exact, ignored_contain, free_text_threshold, pdf_filename
                             )
                             
                             st.success(f"🎉 レポートが完成しました！ (処理した質問数: {processed_questions})")
